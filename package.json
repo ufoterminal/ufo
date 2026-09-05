@@ -1,0 +1,19 @@
+{
+  "name": "talonsscan",
+  "version": "7.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node test/chaos.mjs && node test/chaos3.mjs && node test/chaos3b.mjs && node test/chaos2.mjs"
+  },
+  "dependencies": {
+    "express": "4.21.1",
+    "pg": "8.13.0",
+    "viem": "2.21.19",
+    "compression": "^1.7.5"
+  }
+}

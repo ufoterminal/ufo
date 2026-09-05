@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Token. Talons Scan</title>
+<link rel="stylesheet" href="/styles.css">
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+<header><div class="bar"><a class="brand" href="/"><b>Talons Scan</b><span>Arc mainnet</span></a></div></header>
+<main id="main"><div class="empty">Loading</div></main>
+<script type="module">
+import { fmtUsd, fmtPct, fmtAge, fmtNum, short, esc, EXPLORER, avatar, socials } from "/app.js";
+const address = location.pathname.split("/").pop().toLowerCase();
+const main = document.getElementById("main");
+const $ = (id) => document.getElementById(id);
+const stat = (k, v, tone) => `<div class="stat"><div class="k">${k}</div><div class="v ${tone || ""}">${v}</div></div>`;
+const tone = (v) => (v == null ? "" : v >= 0 ? "up" : "down");
+let data = null, tf = "5m", mode = "price", chart = null, series = null, supply = 1, holdersLoaded = false;
+
+function shell() {
+  const { token, pools, row, similar } = data;
+  document.title = `${token.symbol}. Talons Scan`;
+  const now = Date.now() / 1000;
+  supply = Number(token.total_supply) / 10 ** token.decimals || 1;
+  main.innerHTML = `
+  <div class="head">${avatar(token.address, token.symbol, token.logo, 56, [row?.dex, row?.launchpad])}<h1>${esc(token.symbol)}</h1><span class="mist">${esc(token.name)}</span>${row?.launchpad ? `<span class="badge">via ${esc(row.launchpad.label)}</span>` : ""}${row?.dex ? `<span class="badge">on ${esc(row.dex.label)}</span>` : ""}${socials(token)}<a class="addr" target="_blank" rel="noreferrer" href="${EXPLORER}/token/${token.address}">${token.address}</a></div>
+  ${token.description ? `<p class="desc">${esc(token.description)}</p>` : ""}
+  <div class="stats">
+    ${stat("Price", fmtUsd(row?.price || 0, true))}${stat("Market cap", fmtUsd(row?.mcap || 0))}
+    ${stat("Liquidity", fmtUsd(row?.liquidity || 0))}${stat("Volume 24h", fmtUsd(row?.vol24h || 0))}
+    ${stat("Txns 24h", `${row?.txns24h ?? 0} <span class="sub">(<span class="up">${row?.buys24h ?? 0}</span>/<span class="down">${row?.sells24h ?? 0}</span>)</span>`)}
+    ${stat("Traders 24h", row?.traders24h ?? 0)}
+    ${stat("Holders", `<span id="hcount">..</span>`)}
+    ${stat("Age", fmtAge(row?.createdTs || 0, now))}
+  </div>
+  <div class="stats" style="grid-template-columns:repeat(4,1fr)">
+    ${stat("5m", fmtPct(row?.ch5m), tone(row?.ch5m))}${stat("1h", fmtPct(row?.ch1h), tone(row?.ch1h))}
+    ${stat("6h", fmtPct(row?.ch6h), tone(row?.ch6h))}${stat("24h", fmtPct(row?.ch24h), tone(row?.ch24h))}
+  </div>
+  <div class="chartbox">
+    <div class="chartbar">
+      <span class="seg" id="tfs">${["1m","5m","15m","1h","4h","1d"].map((t) => `<button data-tf="${t}" class="${t === tf ? "on" : ""}">${t}</button>`).join("")}</span>
+      <span class="seg" id="modes"><button data-m="price" class="on">Price</button><button data-m="mc">MC</button></span>
+      <span class="mist" id="chartmsg" style="margin-left:auto"></span>
+    </div>
+    <div id="chart"></div>
+  </div>
+  <div class="note" style="margin:0 0 16px">Supply ${fmtNum(supply)} ${esc(token.symbol)}, ${token.decimals} decimals.
+    ${pools.map((p) => `<span style="margin-left:12px">V${p.version} pool <a target="_blank" rel="noreferrer" href="${EXPLORER}/address/${p.address}">${short(p.address)}</a> ${(p.fee / 10000).toFixed(2)}%, ${fmtUsd(p.liquidity_usd)} liq</span>`).join("")}
+  </div>
+  <div class="tabs"><button data-t="tx" class="on">Transactions</button><button data-t="holders">Holders</button><button data-t="similar">Similar tokens</button></div>
+  <div id="tab-tx" class="wrap"></div>
+  <div id="tab-holders" class="wrap hidden"><div class="empty">Loading holders</div></div>
+  <div id="tab-similar" class="wrap hidden"></div>`;
+
+  document.querySelectorAll("#tfs button").forEach((b) => b.addEventListener("click", () => { tf = b.dataset.tf; document.querySelectorAll("#tfs button").forEach((x) => x.classList.toggle("on", x === b)); loadChart(); }));
+  document.querySelectorAll("#modes button").forEach((b) => b.addEventListener("click", () => { mode = b.dataset.m; document.querySelectorAll("#modes button").forEach((x) => x.classList.toggle("on", x === b)); loadChart(); }));
+  document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => {
+    document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("on", x === b));
+    ["tx", "holders", "similar"].forEach((t) => $("tab-" + t).classList.toggle("hidden", t !== b.dataset.t));
+    if (b.dataset.t === "holders" && !holdersLoaded) loadHolders();
+  }));
+  renderTx(); renderSimilar(similar); initChart(); loadChart(); loadHolders(true);
+}
+function renderTx() {
+  const { token, trades } = data, now = Date.now() / 1000;
+  $("tab-tx").innerHTML = `<table style="min-width:800px">
+    <thead><tr><th class="l">Time</th><th class="l">Type</th><th>USD</th><th>${esc(token.symbol)}</th><th>Price</th><th class="l">Trader</th><th>Txn</th></tr></thead>
+    <tbody>${trades.length ? trades.map((t) => `<tr>
+      <td class="l mist">${fmtAge(t.ts, now)}</td><td class="l ${t.buy ? "up" : "down"}">${t.buy ? "Buy" : "Sell"}</td>
+      <td>${fmtUsd(t.usd)}</td><td>${fmtNum(t.amt)}</td><td>${fmtUsd(t.price, true)}</td>
+      <td class="l"><a class="mist" target="_blank" rel="noreferrer" href="${EXPLORER}/address/${t.trader}">${t.trader ? short(t.trader) : ".."}</a></td>
+      <td><a class="mist" target="_blank" rel="noreferrer" href="${EXPLORER}/tx/${t.tx}">${short(t.tx)}</a></td></tr>`).join("")
+    : `<tr><td colspan="7" class="empty">No swaps recorded in the last 7 days.</td></tr>`}</tbody></table>`;
+}
+function renderSimilar(list) {
+  $("tab-similar").innerHTML = list.length ? `<table><thead><tr><th class="l">Token</th><th class="l">Contract</th></tr></thead><tbody>${list.map((t) => `<tr><td class="l"><a href="/token/${t.address}"><span class="sym">${esc(t.symbol)}</span><span class="name">${esc(t.name)}</span></a></td><td class="l mist">${t.address}</td></tr>`).join("")}</tbody></table>`
+    : `<div class="empty">No other token shares this name or ticker. Watch for copycats before you trade.</div>`;
+}
+async function loadHolders(countOnly) {
+  try {
+    const h = await (await fetch(`/api/holders/${address}`)).json();
+    $("hcount").textContent = h.count == null ? ".." : h.count.toLocaleString();
+    if (countOnly && !holdersLoaded) { if (!$("tab-holders").classList.contains("hidden")) holdersLoaded = true; else return; }
+    holdersLoaded = true;
+    $("tab-holders").innerHTML = h.holders.length ? `<table><thead><tr><th class="l">#</th><th class="l">Holder</th><th>Amount</th><th>%</th></tr></thead><tbody>${h.holders.map((x, i) => `<tr><td class="l mist">${i + 1}</td><td class="l"><a class="mist" target="_blank" rel="noreferrer" href="${EXPLORER}/address/${x.address}">${x.address}</a></td><td>${fmtNum(x.value / 10 ** data.token.decimals)}</td><td>${x.pct.toFixed(2)}%</td></tr>`).join("")}</tbody></table>`
+      : `<div class="empty">Holder data is not available from the explorer for this token yet.</div>`;
+  } catch { $("hcount").textContent = ".."; }
+}
+let legend = null;
+function initChart() {
+  const el = $("chart");
+  el.style.position = "relative";
+  chart = LightweightCharts.createChart(el, {
+    layout: { background: { color: "transparent" }, textColor: "#8a97b8", fontFamily: "IBM Plex Sans" },
+    grid: { vertLines: { color: "rgba(31,42,68,.5)" }, horzLines: { color: "rgba(31,42,68,.5)" } },
+    rightPriceScale: { borderColor: "#1f2a44", scaleMargins: { top: 0.1, bottom: 0.1 } },
+    timeScale: { borderColor: "#1f2a44", timeVisible: true, secondsVisible: false, rightOffset: 4 },
+    crosshair: { mode: 1, vertLine: { color: "#3d4d75", labelBackgroundColor: "#1b2540" }, horzLine: { color: "#3d4d75", labelBackgroundColor: "#1b2540" } },
+    localization: { priceFormatter: (v) => fmtUsd(v, true) },
+    autoSize: true,
+  });
+  series = chart.addCandlestickSeries({ autoscaleInfoProvider: (orig) => {
+      const r = orig();
+      if (!r || !r.priceRange) return r;
+      const { minValue, maxValue } = r.priceRange;
+      if (maxValue <= 0) return r;
+      const pad = (maxValue - minValue) * 0.1 || maxValue * 0.1;
+      return { ...r, priceRange: { minValue: Math.max(0, minValue - pad), maxValue: maxValue + pad } };
+    }, upColor: "#35c98d", downColor: "#ff5c7a", borderVisible: false, wickUpColor: "#35c98d", wickDownColor: "#ff5c7a",
+    priceFormat: { type: "custom", formatter: (v) => fmtUsd(v, true), minMove: 1e-12 } });
+  legend = document.createElement("div");
+  legend.className = "chartlegend";
+  el.appendChild(legend);
+  const write = (b) => {
+    if (!b) { legend.innerHTML = ""; return; }
+    const up = b.close >= b.open;
+    legend.innerHTML = `<span class="mist">O</span> ${fmtUsd(b.open, true)} <span class="mist">H</span> ${fmtUsd(b.high, true)} <span class="mist">L</span> ${fmtUsd(b.low, true)} <span class="mist">C</span> <span class="${up ? "up" : "down"}">${fmtUsd(b.close, true)}</span>`;
+  };
+  chart.subscribeCrosshairMove((param) => {
+    if (!param || !param.time) { write(lastBar); return; }
+    write(param.seriesData.get(series));
+  });
+  chart.legendWrite = write;
+}
+let lastBar = null;
+async function loadChart(keepView = false) {
+  try {
+    const c = await (await fetch(`/api/candles/${address}?tf=${tf}`)).json();
+    const k = mode === "mc" ? supply : 1;
+    const bars = c.candles.map((x) => ({ time: x.t, open: x.o * k, high: x.h * k, low: x.l * k, close: x.c * k }));
+    series.setData(bars);
+    const traded = c.candles.filter((x) => x.v > 0);
+    lastBar = bars[bars.length - 1] || null;
+    if (chart.legendWrite) chart.legendWrite(lastBar);
+    $("chartmsg").textContent = bars.length ? `${traded.length} traded candle${traded.length === 1 ? "" : "s"} in view` : "No trades in this range yet";
+    if (!keepView) chart.timeScale().fitContent();
+  } catch { $("chartmsg").textContent = "Chart failed to load"; }
+}
+async function load(first) {
+  const res = await fetch(`/api/token/${address}`, { cache: "no-store" });
+  if (!res.ok) { main.innerHTML = `<div class="empty">This contract is not in the index. Either it has no USDC pool on Arc yet, or the indexer has not reached its creation block. <a href="/api/status">Status</a></div>`; return; }
+  data = await res.json();
+  if (first) shell(); else { renderTx(); loadChart(true); }
+}
+load(true); setInterval(() => load(false), 15000);
+</script>
+</body>
+</html>

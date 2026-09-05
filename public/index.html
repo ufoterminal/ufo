@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Talons Scan. Arc mainnet screener</title>
+<meta name="description" content="Every USDC pair on Arc mainnet. Price, market cap, volume, liquidity, live trades.">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header><div class="bar">
+  <a class="brand" href="/"><b>Talons Scan</b><span>Arc mainnet</span></a>
+  <input id="q" class="search" placeholder="Search ticker, name or contract" autocomplete="off">
+</div></header>
+<main>
+  <div class="top" id="top"></div>
+  <div class="trend" id="trend"></div>
+  <div class="filters">
+    <span class="seg" id="ver"><button data-v="0" class="on">All</button><button data-v="2">V2</button><button data-v="3">V3</button></span>
+    <input id="minLiq" type="number" placeholder="Min liquidity $">
+    <input id="minVol" type="number" placeholder="Min 24h volume $">
+    <select id="maxAge"><option value="0">Any age</option><option value="86400">Under 1 day</option><option value="604800">Under 7 days</option><option value="2592000">Under 30 days</option></select>
+    <label class="chk"><input type="checkbox" id="hideDead" checked> Hide empty</label>
+    <label class="chk"><input type="checkbox" id="favOnly"> Watchlist</label>
+    <button class="ghost" id="clear">Clear filters</button>
+    <span id="meta" style="margin-left:auto"></span>
+  </div>
+  <div id="searchx" class="hidden"></div>
+  <div class="layout">
+    <div>
+      <div class="wrap"><table>
+        <thead><tr>
+          <th class="star"></th><th class="l">#</th>
+        <th class="l">Token</th><th class="l">Trend</th>
+          <th><button data-k="mcap">MCap</button></th>
+          <th><button data-k="price">Price</button></th>
+          <th><button data-k="createdTs">Age</button></th>
+          <th><button data-k="txns24h">Txns</button></th>
+          <th><button data-k="vol24h">Volume</button></th>
+          <th><button data-k="traders24h">Traders</button></th>
+          <th><button data-k="holders">Holders</button></th>
+          <th><button data-k="ch5m">5m</button></th>
+          <th><button data-k="ch1h">1h</button></th>
+          <th><button data-k="ch6h">6h</button></th>
+          <th><button data-k="ch24h">24h</button></th>
+          <th><button data-k="liquidity">Liquidity</button></th>
+        </tr></thead>
+        <tbody id="rows"><tr><td colspan="16" class="empty">Loading</td></tr></tbody>
+      </table></div>
+      <div class="pager" id="pager"></div>
+      <p class="note">USDC pairs on Uniswap V2 and V3 style pools. One row per token, its deepest pool. Holders and trader wallets are on each token page.</p>
+    </div>
+    <aside class="feed"><h3>Live feed</h3><div id="feed"><div class="empty">Waiting for swaps</div></div></aside>
+  </div>
+</main>
+<script type="module">
+import { fmtUsd, fmtPct, fmtAge, fmtNum, short, esc, avatar, socials } from "/app.js";
+let rows = [], updated = null, status = null, loaded = false;
+let sort = { key: "vol24h", dir: -1 }, ver = 0, page = 1;
+const fav = new Set(JSON.parse(localStorage.getItem("talons.fav") || "[]"));
+let favOnly = false;
+// NEW is about age; OG means this is the first token on Arc to carry that ticker.
+const ageBadge = (r, now) => `${now - r.createdTs < 86400 ? `<span class="tag new">NEW</span>` : ""}${r.og ? `<span class="tag og" title="First token on Arc with this ticker">OG</span>` : ""}`;
+const PAGE = 50;
+const $ = (id) => document.getElementById(id);
+const pct = (v) => `<span class="${v == null ? "mist" : v >= 0 ? "up" : "down"}">${fmtPct(v)}</span>`;
+function spark(arr, up) {
+  if (!arr || arr.length < 2) return `<svg class="spark"></svg>`;
+  const mn = Math.min(...arr), mx = Math.max(...arr), rng = mx - mn || 1;
+  const pts = arr.map((v, i) => `${(i / (arr.length - 1)) * 72},${21 - ((v - mn) / rng) * 20}`).join(" ");
+  return `<svg class="spark" viewBox="0 0 72 22"><polyline fill="none" stroke="${up ? "#35c98d" : "#ff5c7a"}" stroke-width="1.5" points="${pts}"/></svg>`;
+}
+function filtered() {
+  const s = $("q").value.trim().toLowerCase(), now = Date.now() / 1000;
+  const minLiq = +$("minLiq").value || 0, minVol = +$("minVol").value || 0, maxAge = +$("maxAge").value || 0;
+  let list = rows.filter((r) =>
+    (!s || r.symbol.toLowerCase().includes(s) || r.name.toLowerCase().includes(s) || r.token.includes(s) || r.pool.includes(s)) &&
+    (!ver || r.version === ver) && r.liquidity >= minLiq && r.vol24h >= minVol && (!maxAge || now - r.createdTs <= maxAge) &&
+    (!hideDead || r.liquidity > 0 || r.vol24h > 0 || r.txns24h > 0) && (!favOnly || fav.has(r.token)));
+  return list.sort((a, b) => { const x = a[sort.key], y = b[sort.key]; if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1; return (x - y) * sort.dir; });
+}
+function renderPager(pages) {
+  const el = document.getElementById("pager");
+  if (pages <= 1) { el.innerHTML = ""; return; }
+  const nums = new Set([1, pages, page - 1, page, page + 1].filter((n) => n >= 1 && n <= pages));
+  const parts = [];
+  let prev = 0;
+  for (const n of [...nums].sort((a, b) => a - b)) { if (n - prev > 1) parts.push(`<span class="mist">..</span>`); parts.push(`<button data-p="${n}" class="${n === page ? "on" : ""}">${n}</button>`); prev = n; }
+  el.innerHTML = `<button data-p="${page - 1}" ${page === 1 ? "disabled" : ""}>&lsaquo;</button>${parts.join("")}<button data-p="${page + 1}" ${page === pages ? "disabled" : ""}>&rsaquo;</button>`;
+  el.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => { page = +b.dataset.p; render(); window.scrollTo({ top: 0 }); }));
+}
+let searchTimer = null;
+async function explorerSearch() {
+  const term = $("q").value.trim();
+  const box = $("searchx");
+  if (term.length < 2) { box.classList.add("hidden"); box.innerHTML = ""; return; }
+  try {
+    const r = await (await fetch(`/api/search?q=${encodeURIComponent(term)}`)).json();
+    const extra = [...r.local.filter((t) => !t.indexed), ...r.explorer];
+    if (!extra.length) { box.classList.add("hidden"); box.innerHTML = ""; return; }
+    box.classList.remove("hidden");
+    box.innerHTML = `<div class="sub" style="margin-bottom:6px">Traded on Arc, no USDC market indexed:</div><div class="trend">${extra.map((t) => `<a href="/token/${t.address}">${avatar(t.address, t.symbol, t.logo, 18)}<span class="sym">${esc(t.symbol || "?")}</span><span class="mist">${esc(t.name || "")}</span><span class="mist">${short(t.address)}</span></a>`).join("")}</div>`;
+  } catch {}
+}
+function render() {
+  const now = Date.now() / 1000;
+  const list = filtered();
+  document.querySelectorAll("th button").forEach((b) => { b.classList.toggle("on", b.dataset.k === sort.key); b.textContent = b.textContent.replace(/ [\u25BE\u25B4]$/, "") + (b.dataset.k === sort.key ? (sort.dir === -1 ? " \u25BE" : " \u25B4") : ""); });
+  const tot = rows.reduce((a, r) => ({ v: a.v + r.vol24h, l: a.l + r.liquidity, t: a.t + r.txns24h }), { v: 0, l: 0, t: 0 });
+  $("top").innerHTML = [["Tokens", rows.length], ["24h volume", fmtUsd(tot.v)], ["Liquidity", fmtUsd(tot.l)], ["24h txns", tot.t.toLocaleString()]]
+    .map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+  const trending = [...rows].filter((r) => r.txns24h > 0).sort((a, b) => b.vol24h * (1 + b.txns24h) - a.vol24h * (1 + a.txns24h)).slice(0, 10);
+  $("trend").innerHTML = trending.map((r, i) => `<a href="/token/${r.token}"><span class="rank">#${i + 1}</span>${avatar(r.token, r.symbol, r.logo, 18)}<span class="sym">${esc(r.symbol)}</span>${pct(r.ch24h)}</a>`).join("") || `<span class="mist" style="font-size:12px">Trending appears once swaps come in.</span>`;
+  const meta = [`Updated ${updated ? fmtAge(updated / 1000, now) + " ago" : ".."}`];
+  if (status?.tip != null) meta.push(`Block ${status.tip.toLocaleString()}`);
+  if (status && status.head != null && status.tip != null && status.tip - status.head > 600) meta.push(`<span class="down">${(status.tip - status.head).toLocaleString()} blocks behind</span>`);
+  if (status && !status.backfillDone && status.backfill > 0) meta.push(`History to block ${status.backfill.toLocaleString()}`);
+  meta.push(`<a href="/api/status">Status</a>`);
+  $("meta").innerHTML = meta.join(" &nbsp;&nbsp; ");
+  const tb = $("rows");
+  if (!loaded) return;
+  if (!list.length) {
+    const msg = rows.length ? "No token matches these filters."
+      : status?.lastError ? `Last sync failed: ${esc(status.lastError)}`
+      : "No pools indexed yet. Open /api/sync once, the table fills within a minute.";
+    tb.innerHTML = `<tr><td colspan="16" class="empty">${msg}</td></tr>`; document.getElementById("pager").innerHTML = ""; return;
+  }
+  const pages = Math.max(1, Math.ceil(list.length / PAGE));
+  if (page > pages) page = pages;
+  const start = (page - 1) * PAGE;
+  renderPager(pages);
+  queueMicrotask(() => document.querySelectorAll("[data-fav]").forEach((b) => b.addEventListener("click", (e) => {
+    e.stopPropagation(); e.preventDefault(); const a = b.dataset.fav;
+    fav.has(a) ? fav.delete(a) : fav.add(a);
+    localStorage.setItem("talons.fav", JSON.stringify([...fav]));
+    b.classList.toggle("on"); if (favOnly) render();
+  })));
+  tb.innerHTML = list.slice(start, start + PAGE).map((r, i) => `<tr>
+    <td class="star"><button class="fav ${fav.has(r.token) ? "on" : ""}" data-fav="${r.token}" title="Watchlist">\u2605</button></td>
+    <td class="l mist">${start + i + 1}</td>
+    <td class="l"><a href="/token/${r.token}" class="tok">${avatar(r.token, r.symbol, r.logo, 40, [r.dex, r.launchpad])}<span><span class="sym">${esc(r.symbol)}</span><span class="name">${esc(r.name)}</span><span class="badge">V${r.version}</span>${ageBadge(r, now)}${socials(r)}<div class="sub">${short(r.token)} <span style="margin-left:8px">${(r.fee / 10000).toFixed(2)}%</span>${r.launchpad ? `<span class="src">via ${esc(r.launchpad.label)}</span>` : ""}${r.dex ? `<span class="src">on ${esc(r.dex.label)}</span>` : ""}</div></span></a></td>
+    <td class="l">${spark(r.spark, (r.ch24h ?? 0) >= 0)}</td>
+    <td>${fmtUsd(r.mcap)}</td><td>${fmtUsd(r.price, true)}</td><td>${fmtAge(r.createdTs, now)}</td>
+    <td>${r.txns24h}<div class="sub"><span class="up">${r.buys24h}</span> / <span class="down">${r.sells24h}</span></div></td>
+    <td>${fmtUsd(r.vol24h)}</td>
+    <td>${r.traders24h}</td>
+    <td>${r.holders == null ? "<span class=\"mist\">..</span>" : fmtNum(r.holders)}</td>
+    <td>${pct(r.ch5m)}</td><td>${pct(r.ch1h)}</td><td>${pct(r.ch6h)}</td><td>${pct(r.ch24h)}</td>
+    <td>${fmtUsd(r.liquidity)}</td></tr>`).join("");
+}
+async function load() {
+  try { const r = await (await fetch("/api/screener", { cache: "no-store" })).json(); rows = r.rows || []; updated = r.updated; } catch {}
+  loaded = true; render();
+}
+async function loadStatus() { try { status = await (await fetch("/api/status")).json(); } catch {} render(); }
+async function loadFeed() {
+  try {
+    const f = await (await fetch("/api/feed?limit=60", { cache: "no-store" })).json();
+    const now = Date.now() / 1000;
+    $("feed").innerHTML = f.length ? f.map((s) => `<a class="row" href="/token/${s.token}"><span class="mist">${fmtAge(s.ts, now)}</span><span><span class="${s.buy ? "up" : "down"}">${s.buy ? "Buy" : "Sell"}</span> ${avatar(s.token, s.symbol, s.logo, 14)} <span class="sym">${esc(s.symbol)}</span><div class="sub">${short(s.trader || s.tx)}</div></span><span>${fmtUsd(s.usd)}<div class="sub">${fmtNum(s.amt)}</div></span></a>`).join("") : `<div class="empty">Waiting for swaps</div>`;
+  } catch {}
+}
+["q", "minLiq", "minVol", "hideDead", "favOnly"].forEach((id) => $(id)?.addEventListener("input", () => { page = 1; render(); }));
+$("q").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(explorerSearch, 400); });
+$("maxAge").addEventListener("change", render);
+$("clear").addEventListener("click", () => {
+  if ($("hideDead")) $("hideDead").checked = true; ["q", "minLiq", "minVol"].forEach((id) => ($(id).value = "")); $("maxAge").value = "0"; ver = 0; document.querySelectorAll("#ver button").forEach((b) => b.classList.toggle("on", b.dataset.v === "0")); render(); });
+document.querySelectorAll("#ver button").forEach((b) => b.addEventListener("click", () => { ver = +b.dataset.v; document.querySelectorAll("#ver button").forEach((x) => x.classList.toggle("on", x === b)); render(); }));
+document.querySelectorAll("th button").forEach((b) => b.addEventListener("click", () => { const k = b.dataset.k; sort = sort.key === k ? { key: k, dir: -sort.dir } : { key: k, dir: -1 }; render(); }));
+load(); loadStatus(); loadFeed();
+setInterval(load, 15000); setInterval(loadFeed, 10000); setInterval(loadStatus, 60000);
+</script>
+</body>
+</html>
