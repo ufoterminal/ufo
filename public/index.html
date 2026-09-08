@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Talons Pads. Arc launchpad tokens</title>
+<link rel="stylesheet" href="./styles.css">
+<script src="./config.js"></script>
+</head>
+<body>
+<header><div class="bar">
+  <a class="brand" href="/"><b>Talons Pads</b><span>Arc launchpads</span></a>
+  <input id="q" class="search" placeholder="Search ticker, name or contract" autocomplete="off">
+</div></header>
+
+<main>
+  <div class="stats">
+    <div class="card"><div class="k">Tokens</div><div class="v" id="s-tokens">..</div></div>
+    <div class="card"><div class="k">24h volume</div><div class="v" id="s-vol">..</div></div>
+    <div class="card"><div class="k">Liquidity</div><div class="v" id="s-liq">..</div></div>
+    <div class="card"><div class="k">24h txns</div><div class="v" id="s-txns">..</div></div>
+  </div>
+
+  <div class="filters">
+    <label class="chk"><input type="checkbox" id="hideDead" checked> Hide empty</label>
+    <label class="chk"><input type="checkbox" id="favOnly"> Watchlist</label>
+    <input id="minLiq" class="num" placeholder="Min liquidity $" inputmode="numeric">
+    <input id="minVol" class="num" placeholder="Min 24h volume" inputmode="numeric">
+    <div class="chips" id="pads"></div>
+    <button class="ghost" id="clear">Clear filters</button>
+    <span class="mist" id="updated"></span>
+  </div>
+
+  <div class="wrap"><table>
+    <thead><tr>
+      <th class="star"></th><th class="l">#</th><th class="l">Token</th>
+      <th><button data-k="mcap">MCap</button></th>
+      <th><button data-k="price">Price</button></th>
+      <th><button data-k="createdTs">Age</button></th>
+      <th><button data-k="txns24h">Txns</button></th>
+      <th><button data-k="vol24h">Volume</button></th>
+      <th><button data-k="traders24h">Traders</button></th>
+      <th><button data-k="holders">Holders</button></th>
+      <th><button data-k="ch5m">5m</button></th>
+      <th><button data-k="ch1h">1h</button></th>
+      <th><button data-k="ch6h">6h</button></th>
+      <th><button data-k="ch24h">24h</button></th>
+      <th><button data-k="liquidity">Liquidity</button></th>
+    </tr></thead>
+    <tbody id="rows"><tr><td colspan="15" class="empty">Loading</td></tr></tbody>
+  </table></div>
+  <div class="pager" id="pager"></div>
+  <p class="note" id="foot">Tokens launched on Arc launchpads. Every figure comes from the launchpad that created the token; a blank cell means that launchpad does not report it.</p>
+</main>
+
+<script type="module">
+import { api, fmtUsd, fmtPct, fmtAge, fmtNum, short, esc, avatar, socials } from "./app.js";
+const $ = (id) => document.getElementById(id);
+
+let rows = [], pads = [], loaded = false, apiDown = false, page = 1, sort = { key: "vol24h", dir: -1 };
+const PAGE = 50;
+const fav = new Set(JSON.parse(localStorage.getItem("talons.fav") || "[]"));
+const picked = new Set();
+
+async function load() {
+  try {
+    const res = await fetch(api("/api/screener"), { cache: "no-store" });
+    if (!res.ok) throw new Error(String(res.status));
+    const j = await res.json();
+    rows = j.rows || []; pads = j.sources || []; apiDown = false;
+    $("s-tokens").textContent = fmtNum(j.totals.tokens);
+    $("s-vol").textContent = fmtUsd(j.totals.vol24h);
+    $("s-liq").textContent = fmtUsd(j.totals.liquidity);
+    $("s-txns").textContent = fmtNum(j.totals.txns24h);
+    $("updated").textContent = `Updated ${new Date(j.updated * 1000).toLocaleTimeString()}`;
+    renderPads();
+  } catch { apiDown = true; }
+  loaded = true; render();
+}
+
+function renderPads() {
+  $("pads").innerHTML = pads.map((p) => `<button class="chip ${picked.has(p.id) ? "on" : ""}" data-pad="${esc(p.id)}" title="${p.ok ? "answered" : "did not answer"}">${esc(p.label)} <span class="mist">${p.tokens}</span></button>`).join("");
+  $("pads").querySelectorAll("[data-pad]").forEach((b) => b.addEventListener("click", () => {
+    const id = b.dataset.pad;
+    picked.has(id) ? picked.delete(id) : picked.add(id);
+    b.classList.toggle("on"); page = 1; render();
+  }));
+}
+
+function visible() {
+  const q = $("q").value.trim().toLowerCase();
+  const minLiq = Number($("minLiq").value) || 0;
+  const minVol = Number($("minVol").value) || 0;
+  const hideDead = $("hideDead").checked, favOnly = $("favOnly").checked;
+  const list = rows.filter((r) =>
+    (!q || r.symbol.toLowerCase().includes(q) || r.name.toLowerCase().includes(q) || r.token.includes(q)) &&
+    (!picked.size || picked.has(r.launchpad.id)) &&
+    (!favOnly || fav.has(r.token)) &&
+    (r.liquidity ?? 0) >= minLiq && (r.vol24h ?? 0) >= minVol &&
+    (!hideDead || (r.vol24h ?? 0) > 0 || (r.liquidity ?? 0) > 0 || (r.txns24h ?? 0) > 0));
+  const k = sort.key;
+  return list.sort((a, b) => {
+    const x = a[k], y = b[k];
+    if (x == null && y == null) return 0;
+    if (x == null) return 1;
+    if (y == null) return -1;
+    return (x - y) * sort.dir;
+  });
+}
+
+function render() {
+  const tb = $("rows"), now = Math.floor(Date.now() / 1000);
+  if (!loaded) return;
+  const list = visible();
+  if (!list.length) {
+    tb.innerHTML = `<tr><td colspan="15" class="empty">${apiDown
+      ? `No launchpad reader reachable at ${esc(window.TALONS_API || "this domain")}. Deploy the Worker and put its address in config.js.`
+      : rows.length ? "Nothing matches these filters." : "No launchpad returned any tokens. Open /api/sources to see which ones answered."}</td></tr>`;
+    $("pager").innerHTML = "";
+    return;
+  }
+  const pages = Math.max(1, Math.ceil(list.length / PAGE));
+  if (page > pages) page = pages;
+  const start = (page - 1) * PAGE;
+  tb.innerHTML = list.slice(start, start + PAGE).map((r, i) => `<tr onclick="location.href='/token.html?a=${r.token}'">
+    <td class="star"><button class="fav ${fav.has(r.token) ? "on" : ""}" data-fav="${r.token}" title="Watchlist">\u2605</button></td>
+    <td class="l mist">${start + i + 1}</td>
+    <td class="l"><span class="tok">${avatar(r.token, r.symbol, r.logo, 34, r.launchpad)}<span>
+      <span class="sym">${esc(r.symbol)}</span><span class="name">${esc(r.name)}</span>${now - r.createdTs < 86400 && r.createdTs ? `<span class="tag new">NEW</span>` : ""}${socials(r)}
+      <div class="sub">${short(r.token)}<span class="src">via ${esc(r.launchpad.label)}</span>${r.graduated ? `<span class="src">graduated</span>` : r.progress != null ? `<span class="src">${(r.progress / 100).toFixed(0)}% to graduation</span>` : ""}</div>
+    </span></span></td>
+    <td>${r.mcap == null ? '<span class="mist">..</span>' : fmtUsd(r.mcap)}</td>
+    <td>${r.price == null ? '<span class="mist">..</span>' : fmtUsd(r.price, true)}</td>
+    <td class="mist">${r.createdTs ? fmtAge(r.createdTs, now) : ".."}</td>
+    <td>${r.txns24h == null ? '<span class="mist">..</span>' : fmtNum(r.txns24h)}</td>
+    <td>${r.vol24h == null ? '<span class="mist">..</span>' : fmtUsd(r.vol24h)}</td>
+    <td>${r.traders24h == null ? '<span class="mist">..</span>' : fmtNum(r.traders24h)}</td>
+    <td>${r.holders == null ? '<span class="mist">..</span>' : fmtNum(r.holders)}</td>
+    <td>${fmtPct(r.ch5m)}</td><td>${fmtPct(r.ch1h)}</td><td>${fmtPct(r.ch6h)}</td><td>${fmtPct(r.ch24h)}</td>
+    <td>${r.liquidity == null ? '<span class="mist">..</span>' : fmtUsd(r.liquidity)}</td>
+  </tr>`).join("");
+
+  tb.querySelectorAll("[data-fav]").forEach((b) => b.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const a = b.dataset.fav;
+    fav.has(a) ? fav.delete(a) : fav.add(a);
+    localStorage.setItem("talons.fav", JSON.stringify([...fav]));
+    b.classList.toggle("on");
+    if ($("favOnly").checked) render();
+  }));
+
+  const el = $("pager");
+  if (pages <= 1) { el.innerHTML = ""; return; }
+  const nums = [...new Set([1, pages, page - 1, page, page + 1].filter((n) => n >= 1 && n <= pages))].sort((a, b) => a - b);
+  let prev = 0, parts = [];
+  for (const n of nums) { if (n - prev > 1) parts.push(`<span class="mist">..</span>`); parts.push(`<button data-p="${n}" class="${n === page ? "on" : ""}">${n}</button>`); prev = n; }
+  el.innerHTML = `<button data-p="${page - 1}" ${page === 1 ? "disabled" : ""}>\u2039</button>${parts.join("")}<button data-p="${page + 1}" ${page === pages ? "disabled" : ""}>\u203a</button>`;
+  el.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => { page = +b.dataset.p; render(); window.scrollTo({ top: 0 }); }));
+}
+
+["q", "minLiq", "minVol", "hideDead", "favOnly"].forEach((id) => $(id).addEventListener("input", () => { page = 1; render(); }));
+$("clear").addEventListener("click", () => {
+  ["q", "minLiq", "minVol"].forEach((id) => ($(id).value = ""));
+  $("hideDead").checked = true; $("favOnly").checked = false;
+  picked.clear(); renderPads(); page = 1; render();
+});
+document.querySelectorAll("th button").forEach((b) => b.addEventListener("click", () => {
+  const k = b.dataset.k;
+  sort = sort.key === k ? { key: k, dir: -sort.dir } : { key: k, dir: -1 };
+  document.querySelectorAll("th button").forEach((x) => x.classList.toggle("on", x === b));
+  render();
+}));
+
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>

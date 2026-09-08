@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Token. Talons Pads</title>
+<link rel="stylesheet" href="./styles.css">
+<script src="./config.js"></script>
+</head>
+<body>
+<header><div class="bar"><a class="brand" href="/"><b>Talons Pads</b><span>Arc launchpads</span></a></div></header>
+<main id="main"><div class="empty">Loading</div></main>
+<script type="module">
+import { api, fmtUsd, fmtPct, fmtAge, fmtNum, short, esc, avatar, socials, EXPLORER } from "./app.js";
+const address = (new URLSearchParams(location.search).get("a") || "").toLowerCase();
+const main = document.getElementById("main");
+const stat = (k, v) => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`;
+
+async function load() {
+  if (!/^0x[0-9a-f]{40}$/.test(address)) { main.innerHTML = `<div class="empty">That is not a token address.</div>`; return; }
+  let t;
+  try {
+    const r = await fetch(api(`/api/token?a=${address}`), { cache: "no-store" });
+    if (!r.ok) throw new Error(String(r.status));
+    t = (await r.json()).token;
+  } catch {
+    main.innerHTML = `<div class="empty">No launchpad we read lists this token. It may have launched somewhere we do not cover yet.<br><a href="${EXPLORER}/token/${address}" target="_blank" rel="noreferrer">Open on the explorer</a></div>`;
+    return;
+  }
+  const now = Math.floor(Date.now() / 1000);
+  document.title = `${t.symbol}. Talons Pads`;
+  main.innerHTML = `
+    <div class="head">${avatar(t.token, t.symbol, t.logo, 56, t.launchpad)}
+      <h1>${esc(t.symbol)}</h1><span class="mist">${esc(t.name)}</span>
+      <span class="badge">via ${esc(t.launchpad.label)}</span>${t.graduated ? `<span class="badge">graduated</span>` : ""}${socials(t)}
+      <a class="addr" target="_blank" rel="noreferrer" href="${EXPLORER}/token/${t.token}">${t.token}</a>
+    </div>
+    ${t.description ? `<p class="desc">${esc(t.description)}</p>` : ""}
+    <div class="stats">
+      ${stat("Price", t.price == null ? ".." : fmtUsd(t.price, true))}
+      ${stat("Market cap", t.mcap == null ? ".." : fmtUsd(t.mcap))}
+      ${stat("Liquidity", t.liquidity == null ? ".." : fmtUsd(t.liquidity))}
+      ${stat("Volume 24h", t.vol24h == null ? ".." : fmtUsd(t.vol24h))}
+      ${stat("Txns 24h", t.txns24h == null ? ".." : fmtNum(t.txns24h))}
+      ${stat("Traders 24h", t.traders24h == null ? ".." : fmtNum(t.traders24h))}
+      ${stat("Holders", t.holders == null ? ".." : fmtNum(t.holders))}
+      ${stat("Age", t.createdTs ? fmtAge(t.createdTs, now) : "..")}
+    </div>
+    <div class="stats">
+      ${stat("5m", fmtPct(t.ch5m))}${stat("1h", fmtPct(t.ch1h))}${stat("6h", fmtPct(t.ch6h))}${stat("24h", fmtPct(t.ch24h))}
+    </div>
+    ${t.progress != null && !t.graduated ? `<div class="split"><div class="splitlabels"><span>Bonding curve</span><span class="mist">${(t.progress / 100).toFixed(1)}%</span></div><div class="splitbar"><span style="width:${Math.min(100, t.progress / 100)}%"></span></div></div>` : ""}
+    ${t.pool ? `<p class="note">Pool <a class="mist" target="_blank" rel="noreferrer" href="${EXPLORER}/address/${esc(t.pool)}">${short(t.pool)}</a></p>` : ""}
+    <p class="note">Everything here is what ${esc(t.launchpad.label)} reports about the token it created. Blank means that launchpad does not publish it.</p>`;
+}
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>

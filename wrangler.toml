@@ -1,0 +1,6 @@
+name = "talons-pads"
+main = "worker/index.js"
+compatibility_date = "2026-01-01"
+
+# Nothing to configure: no database, no bindings, no secrets. The Worker only reads public launchpad
+# APIs and caches the result at the edge, which keeps it inside the free plan.

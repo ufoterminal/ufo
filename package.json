@@ -1,0 +1,13 @@
+{
+  "name": "talons-pads",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node test/chaos.mjs && node test/chaos2.mjs && node test/chaos3.mjs",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^3.90.0"
+  }
+}
