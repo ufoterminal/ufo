@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wallet. Talons Scan</title>
+<link rel="stylesheet" href="./styles.css">
+<script src="./config.js"></script>
+</head>
+<body>
+<header><div class="bar"><a class="brand" href="/"><b>Talons Scan</b><span>Arc mainnet</span></a></div></header>
+<main id="main"><div class="empty">Loading</div></main>
+<script type="module">
+import { api, fmtUsd, fmtNum, fmtAge, short, esc, avatar, EXPLORER } from "./app.js";
+
+const address = (location.pathname.split("/wallet/")[1] || "").toLowerCase();
+const main = document.getElementById("main");
+const stat = (label, value, cls = "") => `<div class="card"><div class="k">${label}</div><div class="v ${cls}">${value}</div></div>`;
+const signed = (v) => `<span class="${v > 0 ? "up" : v < 0 ? "down" : "mist"}">${v >= 0 ? "+" : "-"}${fmtUsd(Math.abs(v))}</span>`;
+
+async function load() {
+  if (!/^0x[0-9a-f]{40}$/.test(address)) { main.innerHTML = `<div class="empty">That is not an address.</div>`; return; }
+  let w;
+  try { w = await (await fetch(api(`/api/wallet/${address}`), { cache: "no-store" })).json(); }
+  catch { main.innerHTML = `<div class="empty">Could not load this wallet.</div>`; return; }
+
+  if (!w.trades.length) {
+    main.innerHTML = `<div class="head"><h1>Wallet</h1><a class="addr" target="_blank" rel="noreferrer" href="${EXPLORER}/address/${address}">${address}</a></div>
+      <div class="empty">No trades from this wallet in the pools we index. It may trade elsewhere, or only hold tokens.</div>`;
+    return;
+  }
+  const t = w.totals;
+  const open = w.positions.filter((p) => p.amount > 0);
+  main.innerHTML = `
+    <div class="head"><h1>Wallet</h1><a class="addr" target="_blank" rel="noreferrer" href="${EXPLORER}/address/${address}">${address}</a></div>
+    <div class="stats">
+      ${stat("Open value", fmtUsd(t.open))}
+      ${stat("Total P/L", signed(t.pnl || 0))}
+      ${stat("Realised", signed(t.realised))}
+      ${stat("Bought", fmtUsd(t.bought))}
+      ${stat("Sold", fmtUsd(t.sold))}
+      ${stat("Tokens traded", fmtNum(w.positions.length))}
+    </div>
+
+    <h2 class="sec">Positions</h2>
+    <div class="wrap"><table>
+      <thead><tr><th class="l">Token</th><th>Holding</th><th>Value</th><th>Avg cost</th><th>Price</th><th>Unrealised</th><th>Realised</th><th>Trades</th><th>Last</th></tr></thead>
+      <tbody>${w.positions.map((p) => `<tr>
+        <td class="l"><a href="/token/${p.token}" class="tok">${avatar(p.token, p.symbol, p.logo, 28)}<span><span class="sym">${esc(p.symbol || "?")}</span><span class="name">${esc(p.name || "")}</span></span></a></td>
+        <td>${p.amount > 0 ? fmtNum(p.amount) : "<span class='mist'>closed</span>"}</td>
+        <td>${p.amount > 0 ? fmtUsd(p.value) : "<span class='mist'>..</span>"}</td>
+        <td>${p.avg > 0 ? fmtUsd(p.avg, true) : "<span class='mist'>..</span>"}</td>
+        <td>${p.price > 0 ? fmtUsd(p.price, true) : "<span class='mist'>..</span>"}</td>
+        <td>${p.amount > 0 ? signed(p.unrealised) : "<span class='mist'>..</span>"}</td>
+        <td>${signed(p.realised)}</td>
+        <td>${fmtNum(p.trades)}</td>
+        <td class="mist">${fmtAge(p.last, Math.floor(Date.now() / 1000))}</td>
+      </tr>`).join("")}</tbody>
+    </table></div>
+
+    <h2 class="sec">Recent trades</h2>
+    <div class="wrap"><table>
+      <thead><tr><th class="l">Time</th><th class="l">Token</th><th>Side</th><th>Value</th><th>Price</th><th>Amount</th><th>Tx</th></tr></thead>
+      <tbody>${w.trades.slice(0, 100).map((x) => `<tr>
+        <td class="l mist">${fmtAge(x.ts, Math.floor(Date.now() / 1000))}</td>
+        <td class="l"><a href="/token/${x.token}"><span class="sym">${esc(x.symbol || "?")}</span></a></td>
+        <td class="${x.buy ? "up" : "down"}">${x.buy ? "Buy" : "Sell"}</td>
+        <td>${fmtUsd(x.usd)}</td>
+        <td>${fmtUsd(x.price, true)}</td>
+        <td>${fmtNum(x.amt)}</td>
+        <td><a class="mist" target="_blank" rel="noreferrer" href="${EXPLORER}/tx/${x.tx}">${short(x.tx)}</a></td>
+      </tr>`).join("")}</tbody>
+    </table></div>
+    <p class="note">Cost basis is the average paid across the buys we indexed. Tokens received outside a trade, or traded on venues we do not index, are not counted.</p>`;
+  document.title = `${short(address)}. Talons Scan`;
+}
+load();
+</script>
+</body>
+</html>

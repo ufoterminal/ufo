@@ -1,0 +1,11 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": null,
+  "outputDirectory": "public",
+  "cleanUrls": true,
+  "rewrites": [{ "source": "/token/:addr", "destination": "/token.html" }],
+  "headers": [
+    { "source": "/(.*).html", "headers": [{ "key": "cache-control", "value": "no-cache" }] },
+    { "source": "/(.*).(js|css)", "headers": [{ "key": "cache-control", "value": "public, max-age=300" }] }
+  ]
+}

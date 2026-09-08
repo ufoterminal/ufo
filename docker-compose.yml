@@ -1,0 +1,37 @@
+# Everything needed to run the screener on any machine with Docker:
+#   docker compose up -d
+# The database lives in a named volume, so it survives restarts and can be dumped and moved.
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: talons
+      POSTGRES_USER: talons
+      POSTGRES_DB: talons
+    volumes:
+      - talonsdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U talons"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://talons:talons@db:5432/talons
+      PORT: 3000
+      # Optional overrides, all have working defaults:
+      # ARCHIVE_RPC: https://rpc.arc-scan.org
+      # ARCSCAN_API: https://api.arc-scan.org
+      # DYOR_API: https://arc-api-production-ef9c.up.railway.app
+    ports:
+      - "3000:3000"
+
+volumes:
+  talonsdata:
